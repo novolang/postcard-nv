@@ -1,0 +1,495 @@
+// postcard — the compact `serde` wire format: varints, length-prefixed
+// strings and sequences, and no schema on the wire at all.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHAT IT IS.  A struct becomes its members' encodings end to end, with
+// nothing between them: no names, no lengths, no framing.  An `Int` is
+// a zigzag varint, a `Float` is eight little-endian bytes, a `Str` is a
+// varint byte count and then the bytes, a sequence is a varint count
+// and then the elements, an enum is a varint variant index and then the
+// payload, and the unit is nothing whatsoever.  A three-member struct
+// of small integers is three bytes.
+//
+// WHAT IT COSTS.  Reading it back needs the type.  There is no way to
+// skip a member without knowing its width, no way to detect that the
+// writer and the reader disagree, and no way to add a member in the
+// middle.  That is the trade postcard makes on purpose, and it is why
+// this sits BESIDE a log stream rather than inside one — a log frame is
+// self-describing through the ELF, and a postcard payload is
+// self-describing through nothing.
+//
+// TWO SURFACES, and a reader should know which one they are on.
+//
+//   * The TRAIT surface — `to_bytes` and `from_bytes` over the standard
+//     library's `Serialize` / `Deserialize` — writes a novo-lang type
+//     with no code to write.  It is wire-compatible with Rust postcard
+//     for the types it can express, and the README lists exactly where
+//     it is not.
+//   * The RAW surface — `put_*` and `take_*` over a `Cursor` — writes
+//     the format byte for byte.  It is what a caller reaches for when
+//     the other end is a Rust `struct` whose members are `u32`s, or
+//     when the payload has an `Option` in it, because those are the two
+//     things the trait surface cannot say.
+//
+// The varint is leb128-nv's and the signed folding is zigzag-nv's,
+// declared as dependencies rather than written again: postcard's
+// integers ARE LEB128 and ZigZag, and two copies of an encoding are two
+// things to keep in step.  Both are in the manifest and neither is
+// imported here yet — every body is a `todo()`, so there is nothing to
+// call them from, and a `use` for a module nothing names is dead code
+// whether or not it will be alive later.
+
+use std.bytes
+
+// ── The wire faults ─────────────────────────────────────────────────
+
+// What went wrong while reading or writing postcard bytes.
+//
+// Every variant but the last is an input fault, so it is a value: bytes
+// arriving off a wire are data, and refusing to answer is a result
+// while crashing is not.  Each carries the offset it was found at,
+// because a payload with no framing gives a reader nothing else to go
+// on.
+//
+// The names are all prefixed because a variant is constructed by name
+// across the whole assembly, and `Truncated` is the name every codec
+// wants.
+pub enum PostcardError
+    // The buffer ended in the middle of a value.
+    PostcardTruncated(at: Int, need: Int)
+    // A varint whose continuation bits ran past the width its type can
+    // hold.  A reader that accepted one would silently truncate.
+    PostcardOverlongVarint(at: Int)
+    // An `Option` discriminant that is neither 0 nor 1, or a `Bool` byte
+    // that is neither.
+    PostcardBadTag(at: Int, tag: Int)
+    // A length-prefixed string whose bytes are not UTF-8.
+    PostcardBadUtf8(at: Int)
+    // The value was read and bytes were left over.  A caller decoding
+    // one message from one buffer wants to know; a caller reading a
+    // stream does not, and uses the cursor's position instead.
+    PostcardTrailingBytes(at: Int, len: Int)
+    // A `?T` member reached the writer through the `Serializer` trait.
+    //
+    // Not an input fault — the one thing this format needs that the
+    // trait cannot express.  postcard's `Option` is a discriminant byte
+    // and then the value, and the trait announces `None` (as
+    // `put_null`) while announcing `Some` not at all, so a writer
+    // cannot put the 1 in front of a present value.  The README says
+    // what to do instead, which is the raw surface.
+    PostcardOptionalMember
+
+// The standard `Error` implementation, so a bad payload can be reported
+// by anything that reports errors.
+impl Error for PostcardError
+    // Answer the one-line report: what was wrong, and at what offset.
+    // The offset is in the text rather than left for the caller to add,
+    // because a format with no framing gives a reader no other way to
+    // say where it stopped.
+    fn message(self) -> Str
+        todo("postcard.PostcardError.message")
+
+// ── The raw surface: the format, byte for byte ──────────────────────
+
+// The most bytes a varint can occupy: 10, which is a 64-bit value at
+// seven bits per byte.
+//
+// What a caller sizing a buffer for one integer reserves.
+pub fn max_varint_len() -> Int
+    todo("postcard.max_varint_len")
+
+// How many bytes `v` occupies as an UNSIGNED varint.
+//
+// `v` must not be negative; a negative value belongs in `signed_len`,
+// because postcard folds signed integers rather than sign-extending
+// them and a sign-extended negative is ten bytes every time.
+//
+// ```novo
+// use postcard
+//
+// fn main() [io]
+//     println("${postcard.unsigned_len(0)} ${postcard.unsigned_len(127)} ${postcard.unsigned_len(128)}")
+//     // 1 1 2
+// ```
+pub fn unsigned_len(v: Int) -> Int
+    todo("postcard.unsigned_len")
+
+// How many bytes `v` occupies as a SIGNED varint: zigzag, then LEB128.
+//
+// The folding is what keeps a small negative small — `-1` is one byte
+// here and ten bytes without it — and it is exactly what postcard does
+// to every `iN`.
+//
+// ```novo
+// use postcard
+//
+// fn main() [io]
+//     println("${postcard.signed_len(0 - 1)} ${postcard.signed_len(0 - 64)} ${postcard.signed_len(0 - 65)}")
+//     // 1 1 2
+// ```
+pub fn signed_len(v: Int) -> Int
+    todo("postcard.signed_len")
+
+// Write `v` as an unsigned varint at the cursor, and answer the bytes
+// written.  postcard's `u16`, `u32`, `u64` and `usize`.
+pub fn put_unsigned(mut dst: Cursor, v: Int) -> Int
+    todo("postcard.put_unsigned")
+
+// Write `v` as a signed varint at the cursor, and answer the bytes
+// written.  postcard's `i16`, `i32`, `i64` and `isize`, and what the
+// trait surface writes for every `Int`.
+pub fn put_signed(mut dst: Cursor, v: Int) -> Int
+    todo("postcard.put_signed")
+
+// Write `v` as one raw byte, and answer 1.  postcard's `u8` and `i8`,
+// which are the two integers it does NOT varint — a byte is already a
+// byte, and a varint of one would sometimes be two.
+pub fn put_byte(mut dst: Cursor, v: Int) -> Int
+    todo("postcard.put_byte")
+
+// Write `v` as one byte, 0 or 1, and answer 1.
+pub fn put_bool(mut dst: Cursor, v: Bool) -> Int
+    todo("postcard.put_bool")
+
+// Write `v` as eight little-endian bytes of IEEE-754 double, and answer
+// 8.  postcard's `f64`, and one of the two things in the format that is
+// not a varint.
+pub fn put_f64(mut dst: Cursor, v: Float) -> Int
+    todo("postcard.put_f64")
+
+// Write `v` as a varint byte count and then its UTF-8 bytes, and answer
+// the total.  postcard's `&str` and `String`.
+pub fn put_str(mut dst: Cursor, v: Str) -> Int
+    todo("postcard.put_str")
+
+// Write `v` as a varint byte count and then the bytes, and answer the
+// total.  postcard's `&[u8]`.
+pub fn put_bytes(mut dst: Cursor, v: Bytes) -> Int
+    todo("postcard.put_bytes")
+
+// Write the element count that opens a sequence, and answer the bytes
+// written.
+//
+// A separate function from `put_unsigned` even though the encoding is
+// identical, so that a hand-written encoder reads as the format rather
+// than as arithmetic — and so that a reader of that encoder can see
+// where a sequence begins.
+pub fn put_seq_len(mut dst: Cursor, n: Int) -> Int
+    todo("postcard.put_seq_len")
+
+// Write the variant index that opens an enum value, and answer the
+// bytes written.  A varint, so the first 128 variants cost one byte.
+pub fn put_variant(mut dst: Cursor, index: Int) -> Int
+    todo("postcard.put_variant")
+
+// Write the `None` discriminant — one zero byte — and answer 1.
+pub fn put_none(mut dst: Cursor) -> Int
+    todo("postcard.put_none")
+
+// Write the `Some` discriminant — one `0x01` byte — and answer 1.  The
+// value follows, written by the caller.
+//
+// This is the half of postcard's `Option` the `Serializer` trait cannot
+// reach, and the reason the raw surface exists at all.
+pub fn put_some(mut dst: Cursor) -> Int
+    todo("postcard.put_some")
+
+// Read an unsigned varint at the cursor, which advances past it.
+pub fn take_unsigned(mut src: Cursor) -> Result<Int, PostcardError>
+    todo("postcard.take_unsigned")
+
+// Read a signed varint at the cursor, which advances past it: LEB128,
+// then unfolded from zigzag.
+pub fn take_signed(mut src: Cursor) -> Result<Int, PostcardError>
+    todo("postcard.take_signed")
+
+// Read one raw byte at the cursor, which advances past it.
+pub fn take_byte(mut src: Cursor) -> Result<Int, PostcardError>
+    todo("postcard.take_byte")
+
+// Read one byte at the cursor as a boolean, which advances past it.
+// Anything but 0 or 1 is `PostcardBadTag`, because a format with no
+// framing has nothing else to notice corruption with.
+pub fn take_bool(mut src: Cursor) -> Result<Bool, PostcardError>
+    todo("postcard.take_bool")
+
+// Read eight little-endian bytes at the cursor as a double, which
+// advances past them.
+pub fn take_f64(mut src: Cursor) -> Result<Float, PostcardError>
+    todo("postcard.take_f64")
+
+// Read a varint-prefixed UTF-8 string at the cursor, which advances
+// past it.
+pub fn take_str(mut src: Cursor) -> Result<Str, PostcardError>
+    todo("postcard.take_str")
+
+// Read a varint-prefixed byte run at the cursor, which advances past
+// it.
+pub fn take_bytes(mut src: Cursor) -> Result<Bytes, PostcardError>
+    todo("postcard.take_bytes")
+
+// Read the element count that opens a sequence, and advance past it.
+pub fn take_seq_len(mut src: Cursor) -> Result<Int, PostcardError>
+    todo("postcard.take_seq_len")
+
+// Read the variant index that opens an enum value, and advance past it.
+pub fn take_variant(mut src: Cursor) -> Result<Int, PostcardError>
+    todo("postcard.take_variant")
+
+// Read an `Option` discriminant: `true` when a value follows, `false`
+// when the option was `None`.  Anything but 0 or 1 is `PostcardBadTag`.
+pub fn take_option(mut src: Cursor) -> Result<Bool, PostcardError>
+    todo("postcard.take_option")
+
+// ── The trait surface: a novo-lang type, with no code to write ──────
+
+// A postcard document being built.
+//
+// `out` accumulates byte values because a `Serializer` is THREADED
+// rather than mutated — every method takes the writer and returns it —
+// and a growable list is the accumulator that shape wants.  A caller
+// who needs the finished `Bytes` calls `writer_bytes`.
+//
+// `saw_null` is set when `put_null` is called, which is the only way a
+// `?T` member can reach a format through this trait.  It is a field and
+// not a panic because a `Serializer` method returns `Self` and has
+// nowhere to put a failure, so the failure is carried to `writer_bytes`
+// and reported there.
+pub struct PostcardWriter
+    out: [Int]
+    saw_null: Bool
+
+// A cursor into a postcard document.
+//
+// `at` is the byte offset the next read starts at, and `path` is the
+// route from the document's root — which a `DeserializeError` needs and
+// which the bytes themselves cannot supply, because postcard writes no
+// names.  The path is built from the member names the WALK passes in,
+// so a failure still says `$.user.tags` even though the wire does not.
+pub struct PostcardReader
+    src: Bytes
+    at: Int
+    path: Str
+
+// A fresh writer with nothing in it.
+pub fn writer() -> PostcardWriter
+    todo("postcard.writer")
+
+// The bytes a writer accumulated — or the refusal, when a `?T` member
+// reached it.
+//
+// This is where the optional-member problem surfaces, and it surfaces
+// as a value rather than a panic because a caller may be serializing a
+// type it did not write.
+pub fn writer_bytes(w: PostcardWriter) -> Result<Bytes, PostcardError>
+    todo("postcard.writer_bytes")
+
+// A fresh reader over `src`.
+pub fn reader(src: Bytes) -> PostcardReader
+    todo("postcard.reader")
+
+// How many bytes of `src` a reader has consumed.
+//
+// The one thing a caller decoding a STREAM of postcard messages needs
+// and cannot get from the format: there is no terminator, so the end of
+// one message is wherever the reader stopped.
+pub fn reader_at(r: PostcardReader) -> Int
+    todo("postcard.reader_at")
+
+// The format side, so a novo-lang struct or enum writes itself.
+//
+// Every bracket method is a no-op, and that IS postcard: a struct is
+// its members end to end with nothing announcing them, so `begin_struct`,
+// `field` and `end_struct` have nothing to write.  The three that DO
+// write are `begin_seq` (the element count), `begin_variant` (the
+// variant index) and the scalars.
+impl Serializer for PostcardWriter
+    // Record that a `?T` member was `None`.  Writing the zero
+    // discriminant here would be wrong on its own, because the `Some`
+    // branch has no hook to write the one — see `PostcardOptionalMember`.
+    fn put_null(self) -> PostcardWriter
+        todo("postcard.PostcardWriter.put_null")
+
+    fn put_bool(self, v: Bool) -> PostcardWriter
+        todo("postcard.PostcardWriter.put_bool")
+
+    // Every `Int` is a signed varint, which is postcard's `i64`.
+    // novo-lang has one integer type and postcard has ten integer
+    // encodings, so a wire that expects a `u32` needs the raw surface —
+    // the README says so where a reader will look for it.
+    fn put_int(self, v: Int) -> PostcardWriter
+        todo("postcard.PostcardWriter.put_int")
+
+    fn put_float(self, v: Float) -> PostcardWriter
+        todo("postcard.PostcardWriter.put_float")
+
+    fn put_str(self, v: Str) -> PostcardWriter
+        todo("postcard.PostcardWriter.put_str")
+
+    // Nothing: a struct has no framing on this wire.  `name` and `n`
+    // are what a self-describing format would write, and postcard is
+    // the format that does not.
+    fn begin_struct(self, name: Str, n: Int) -> PostcardWriter
+        todo("postcard.PostcardWriter.begin_struct")
+
+    // Nothing: members are told apart by ORDER, and the walk visits
+    // them in declaration order (SPEC § 3.8.1).  That guarantee is the
+    // one this whole surface rests on.
+    fn field(self, name: Str) -> PostcardWriter
+        todo("postcard.PostcardWriter.field")
+
+    fn end_struct(self) -> PostcardWriter
+        todo("postcard.PostcardWriter.end_struct")
+
+    // The element count, as a varint.  It is the only length postcard
+    // writes, and it is what lets a reader walk a sequence of a type it
+    // knows without a terminator.
+    fn begin_seq(self, n: Int) -> PostcardWriter
+        todo("postcard.PostcardWriter.begin_seq")
+
+    fn elem(self) -> PostcardWriter
+        todo("postcard.PostcardWriter.elem")
+
+    fn end_seq(self) -> PostcardWriter
+        todo("postcard.PostcardWriter.end_seq")
+
+    // The variant index, as a varint — the compact tagging the trait's
+    // default identity pair exists to be overridden for.  The struct
+    // and field calls the walk makes between here and `end_variant`
+    // write nothing, so an enum value is its index and its payload and
+    // nothing else, which is what Rust postcard puts on the wire.
+    fn begin_variant(self, enum_name: Str, variant: Str, index: Int, n: Int) -> PostcardWriter
+        todo("postcard.PostcardWriter.begin_variant")
+
+    fn end_variant(self) -> PostcardWriter
+        todo("postcard.PostcardWriter.end_variant")
+
+// The cursor side, so a novo-lang struct or enum reads itself.
+//
+// **THIS IMPL CANNOT BE WRITTEN CORRECTLY AGAINST TODAY'S TRAIT**, and
+// it is published rather than withdrawn so that the shape is reviewable
+// before anybody writes a body against it.  The README's "Reading a
+// novo-lang type back" section carries the trace; this is the sentence.
+//
+// `Serializer` is THREADED — every method takes the writer and returns
+// it — and `Deserializer` is not.  `field(self, name)` answers a CHILD
+// cursor and leaves the parent unchanged, and the read walk asks the
+// same parent for every member.  A self-describing format is fine with
+// that: `field("beta")` scans the document for the key.  postcard has
+// no names and no offsets, so member 2 begins wherever member 1 ended,
+// and the parent has no way to learn where that was — the position the
+// child advanced to is discarded with the child, and the trait's
+// methods take `self` by value and declare no effects, so there is
+// nowhere else to keep it.
+//
+// The failure is silent: every member reads the first value.
+//
+// The write half has no such problem and is correct today, and the raw
+// `take_*` surface above reads a document sequentially because a
+// `Cursor` takes `mut self` and does advance.  Both stay; this impl is
+// what needs the standard library to move.
+impl Deserializer for PostcardReader
+    // Descend to the next member.  `name` is used for the ERROR PATH
+    // and for nothing else, because the wire carries no names.
+    //
+    // This is the method the block above is about: the cursor it
+    // answers is the only thing that knows where the member ended, and
+    // the walk throws it away before asking for the next one.
+    fn field(self, name: Str) -> Result<PostcardReader, DeserializeError>
+        todo("postcard.PostcardReader.field")
+
+    // Read the `Option` discriminant, and descend when it says a value
+    // follows.  This is the read side of the optional problem, and it
+    // works where the write side does not — the trait gives a reader
+    // the hook it denies a writer.
+    fn opt_field(self, name: Str) -> ?PostcardReader
+        todo("postcard.PostcardReader.opt_field")
+
+    // The empty list, always.  A postcard document has no names in it,
+    // so there is nothing to answer — and the one caller in the
+    // standard library's walk, the externally tagged enum reader, is
+    // the caller `begin_variant`'s index encoding replaces.
+    fn keys(self) -> [Str]
+        todo("postcard.PostcardReader.keys")
+
+    fn seq_len(self) -> Result<Int, DeserializeError>
+        todo("postcard.PostcardReader.seq_len")
+
+    // Element `i`, found by decoding elements 0 through `i - 1` and
+    // discarding them, because postcard writes no offsets.  A walk that
+    // asks for every element in order therefore costs O(n²) — and
+    // unlike `field`, this one at least CAN be written, because the
+    // index says how far to skip.
+    fn seq_at(self, i: Int) -> Result<PostcardReader, DeserializeError>
+        todo("postcard.PostcardReader.seq_at")
+
+    // Peek at the `Option` discriminant without consuming it.
+    fn is_null(self) -> Bool
+        todo("postcard.PostcardReader.is_null")
+
+    fn get_bool(self) -> Result<Bool, DeserializeError>
+        todo("postcard.PostcardReader.get_bool")
+
+    fn get_int(self) -> Result<Int, DeserializeError>
+        todo("postcard.PostcardReader.get_int")
+
+    fn get_float(self) -> Result<Float, DeserializeError>
+        todo("postcard.PostcardReader.get_float")
+
+    fn get_str(self) -> Result<Str, DeserializeError>
+        todo("postcard.PostcardReader.get_str")
+
+    fn fail(self, reason: Str) -> DeserializeError
+        todo("postcard.PostcardReader.fail")
+
+// Write any serializable value as postcard bytes.
+//
+// The one call the trait surface exists for.  It fails only for
+// `PostcardOptionalMember` — a `?T` anywhere in the type — because
+// every other member the walk can present has an encoding here.
+//
+// ```novo
+// use postcard
+//
+// struct Reading
+//     sensor: Int
+//     celsius: Float
+//
+// fn main() [io]
+//     match postcard.to_bytes(Reading { sensor: 3, celsius: 21.5 })
+//         Ok(b)  => println("${bytes.len(b)}")   // 9: one varint, eight bytes of double
+//         Err(e) => println(e.message())
+// ```
+pub fn to_bytes<T: Serialize>(v: T) -> Result<Bytes, PostcardError>
+    todo("postcard.to_bytes")
+
+// Read postcard bytes back into any deserializable type.
+//
+// `T` is named by nothing but the result, so the call has to sit where
+// the type is known — a binding with an annotation, or a return
+// position.  The error is the standard library's `DeserializeError`
+// rather than this package's, because that is what the trait returns
+// and a walk forty members deep is exactly the case its `path` is for.
+//
+// Bytes left over are NOT an error here: a caller decoding one message
+// from one buffer checks `reader_at` against the buffer's length, and a
+// caller reading a stream wants the position rather than a complaint.
+//
+// ```novo
+// use postcard
+//
+// struct Reading
+//     sensor: Int
+//     celsius: Float
+//
+// fn main() [io]
+//     let raw = bytes.from_hex("060000000000803540") ?? bytes.zeros(0)
+//     let r: Result<Reading, DeserializeError> = postcard.from_bytes(raw)
+//     match r
+//         Ok(x)  => println("${x.sensor}")
+//         Err(e) => println(e.message())
+// ```
+pub fn from_bytes<T: Deserialize>(src: Bytes) -> Result<T, DeserializeError>
+    todo("postcard.from_bytes")

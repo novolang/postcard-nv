@@ -1,0 +1,40 @@
+[package]
+name        = "postcard-nv"
+version     = "0.0.1"
+description = "The compact serde wire format: zigzag varint integers, length-prefixed strings and sequences, and no schema on the wire.  A struct is its members end to end with nothing between them.  Two surfaces — the standard library's Serialize traits, and a raw put/take pair for the cases the traits cannot say.  Interface only — every body is a todo()."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`: arithmetic over bytes the caller already holds.  No function
+# declares an effect — a wire format has nowhere to put one.
+#
+# It carries no `tests/embedded_probe.nv` and therefore makes NO device
+# claim, on purpose: the surface speaks `Bytes`, `Str` and `Result`, and
+# none of the three links at `@tier(embedded)` today.  The device half
+# of the deferred-logging story is rzcobs-nv, bbqueue-nv and
+# heapless-nv; this is the payload beside it, on the host.
+layer       = "core"
+
+category    = "encoding"
+
+tags        = ["postcard", "serde", "varint", "leb128", "zigzag", "wire-format", "defmt", "deferred-logging", "sans-io"]
+repository  = "https://github.com/novolang/postcard-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+[docs.pages]
+"README.md" = "A typed payload in as few bytes as the values need"
+
+[dependencies]
+# postcard's integers ARE LEB128 and ZigZag, so they are declared rather
+# than written again: two copies of an encoding are two things to keep
+# in step.  Both are `core`, which is what a `core` package may depend
+# on.
+leb128-nv = "^0.1.5"
+zigzag-nv = "^0.1.4"
