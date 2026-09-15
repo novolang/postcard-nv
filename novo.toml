@@ -1,6 +1,6 @@
 [package]
 name        = "postcard-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "The compact serde wire format: zigzag varint integers, length-prefixed strings and sequences, and no schema on the wire.  A struct is its members end to end with nothing between them.  Two surfaces — the standard library's Serialize traits, and a raw put/take pair for the cases the traits cannot say.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
