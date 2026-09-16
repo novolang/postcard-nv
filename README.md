@@ -154,7 +154,8 @@ See rules 4 and 5.
 
 - **A build for a microcontroller.** The surface speaks `Bytes`, `Str`
   and `Result`, none of which links on a device today, so this package
-  makes no device claim and carries no probe. The device packages beside
+  does not build for a microcontroller with no heap allocator and
+  carries no probe program. The device packages beside
   it are [rzcobs-nv](https://novo-lang.org/packages/rzcobs-nv),
   [bbqueue-nv](https://novo-lang.org/packages/bbqueue-nv) and
   [heapless-nv](https://novo-lang.org/packages/heapless-nv).
