@@ -4,6 +4,18 @@ Every published version, newest first. This file is on the publish
 allow-list, so it travels with the package: it is the only thing a
 consumer deciding whether to upgrade can read.
 
+## 0.0.3 — 2026-09-25
+
+The package builds with novo 0.11.  Every body is still `todo()`.
+
+- The lock file moves leb128-nv 0.1.5 to 0.1.7 and zigzag-nv 0.1.4 to
+  0.1.5.  leb128-nv 0.1.5 writes into lists through names that are not
+  declared `var`, which novo 0.11 refuses (E2038), so this package did
+  not build with novo 0.11 against it.  No requirement in the manifest
+  changed.
+- A `mut` parameter is written `var`, the spelling `novo fmt` writes.
+  The two spellings mean the same thing, and no signature changed.
+
 ## 0.0.2 — 2026-09-15
 
 README rewritten to the package README style guide (docs/writing-a-readme.md); no change to the interface.

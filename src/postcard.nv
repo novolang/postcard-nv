@@ -134,39 +134,39 @@ pub fn signed_len(v: Int) -> Int
 
 // Write `v` as an unsigned varint at the cursor, and answer the bytes
 // written.  postcard's `u16`, `u32`, `u64` and `usize`.
-pub fn put_unsigned(mut dst: Cursor, v: Int) -> Int
+pub fn put_unsigned(var dst: Cursor, v: Int) -> Int
     todo("postcard.put_unsigned")
 
 // Write `v` as a signed varint at the cursor, and answer the bytes
 // written.  postcard's `i16`, `i32`, `i64` and `isize`, and what the
 // trait surface writes for every `Int`.
-pub fn put_signed(mut dst: Cursor, v: Int) -> Int
+pub fn put_signed(var dst: Cursor, v: Int) -> Int
     todo("postcard.put_signed")
 
 // Write `v` as one raw byte, and answer 1.  postcard's `u8` and `i8`,
 // which are the two integers it does NOT varint — a byte is already a
 // byte, and a varint of one would sometimes be two.
-pub fn put_byte(mut dst: Cursor, v: Int) -> Int
+pub fn put_byte(var dst: Cursor, v: Int) -> Int
     todo("postcard.put_byte")
 
 // Write `v` as one byte, 0 or 1, and answer 1.
-pub fn put_bool(mut dst: Cursor, v: Bool) -> Int
+pub fn put_bool(var dst: Cursor, v: Bool) -> Int
     todo("postcard.put_bool")
 
 // Write `v` as eight little-endian bytes of IEEE-754 double, and answer
 // 8.  postcard's `f64`, and one of the two things in the format that is
 // not a varint.
-pub fn put_f64(mut dst: Cursor, v: Float) -> Int
+pub fn put_f64(var dst: Cursor, v: Float) -> Int
     todo("postcard.put_f64")
 
 // Write `v` as a varint byte count and then its UTF-8 bytes, and answer
 // the total.  postcard's `&str` and `String`.
-pub fn put_str(mut dst: Cursor, v: Str) -> Int
+pub fn put_str(var dst: Cursor, v: Str) -> Int
     todo("postcard.put_str")
 
 // Write `v` as a varint byte count and then the bytes, and answer the
 // total.  postcard's `&[u8]`.
-pub fn put_bytes(mut dst: Cursor, v: Bytes) -> Int
+pub fn put_bytes(var dst: Cursor, v: Bytes) -> Int
     todo("postcard.put_bytes")
 
 // Write the element count that opens a sequence, and answer the bytes
@@ -176,16 +176,16 @@ pub fn put_bytes(mut dst: Cursor, v: Bytes) -> Int
 // identical, so that a hand-written encoder reads as the format rather
 // than as arithmetic — and so that a reader of that encoder can see
 // where a sequence begins.
-pub fn put_seq_len(mut dst: Cursor, n: Int) -> Int
+pub fn put_seq_len(var dst: Cursor, n: Int) -> Int
     todo("postcard.put_seq_len")
 
 // Write the variant index that opens an enum value, and answer the
 // bytes written.  A varint, so the first 128 variants cost one byte.
-pub fn put_variant(mut dst: Cursor, index: Int) -> Int
+pub fn put_variant(var dst: Cursor, index: Int) -> Int
     todo("postcard.put_variant")
 
 // Write the `None` discriminant — one zero byte — and answer 1.
-pub fn put_none(mut dst: Cursor) -> Int
+pub fn put_none(var dst: Cursor) -> Int
     todo("postcard.put_none")
 
 // Write the `Some` discriminant — one `0x01` byte — and answer 1.  The
@@ -193,54 +193,54 @@ pub fn put_none(mut dst: Cursor) -> Int
 //
 // This is the half of postcard's `Option` the `Serializer` trait cannot
 // reach, and the reason the raw surface exists at all.
-pub fn put_some(mut dst: Cursor) -> Int
+pub fn put_some(var dst: Cursor) -> Int
     todo("postcard.put_some")
 
 // Read an unsigned varint at the cursor, which advances past it.
-pub fn take_unsigned(mut src: Cursor) -> Result<Int, PostcardError>
+pub fn take_unsigned(var src: Cursor) -> Result<Int, PostcardError>
     todo("postcard.take_unsigned")
 
 // Read a signed varint at the cursor, which advances past it: LEB128,
 // then unfolded from zigzag.
-pub fn take_signed(mut src: Cursor) -> Result<Int, PostcardError>
+pub fn take_signed(var src: Cursor) -> Result<Int, PostcardError>
     todo("postcard.take_signed")
 
 // Read one raw byte at the cursor, which advances past it.
-pub fn take_byte(mut src: Cursor) -> Result<Int, PostcardError>
+pub fn take_byte(var src: Cursor) -> Result<Int, PostcardError>
     todo("postcard.take_byte")
 
 // Read one byte at the cursor as a boolean, which advances past it.
 // Anything but 0 or 1 is `PostcardBadTag`, because a format with no
 // framing has nothing else to notice corruption with.
-pub fn take_bool(mut src: Cursor) -> Result<Bool, PostcardError>
+pub fn take_bool(var src: Cursor) -> Result<Bool, PostcardError>
     todo("postcard.take_bool")
 
 // Read eight little-endian bytes at the cursor as a double, which
 // advances past them.
-pub fn take_f64(mut src: Cursor) -> Result<Float, PostcardError>
+pub fn take_f64(var src: Cursor) -> Result<Float, PostcardError>
     todo("postcard.take_f64")
 
 // Read a varint-prefixed UTF-8 string at the cursor, which advances
 // past it.
-pub fn take_str(mut src: Cursor) -> Result<Str, PostcardError>
+pub fn take_str(var src: Cursor) -> Result<Str, PostcardError>
     todo("postcard.take_str")
 
 // Read a varint-prefixed byte run at the cursor, which advances past
 // it.
-pub fn take_bytes(mut src: Cursor) -> Result<Bytes, PostcardError>
+pub fn take_bytes(var src: Cursor) -> Result<Bytes, PostcardError>
     todo("postcard.take_bytes")
 
 // Read the element count that opens a sequence, and advance past it.
-pub fn take_seq_len(mut src: Cursor) -> Result<Int, PostcardError>
+pub fn take_seq_len(var src: Cursor) -> Result<Int, PostcardError>
     todo("postcard.take_seq_len")
 
 // Read the variant index that opens an enum value, and advance past it.
-pub fn take_variant(mut src: Cursor) -> Result<Int, PostcardError>
+pub fn take_variant(var src: Cursor) -> Result<Int, PostcardError>
     todo("postcard.take_variant")
 
 // Read an `Option` discriminant: `true` when a value follows, `false`
 // when the option was `None`.  Anything but 0 or 1 is `PostcardBadTag`.
-pub fn take_option(mut src: Cursor) -> Result<Bool, PostcardError>
+pub fn take_option(var src: Cursor) -> Result<Bool, PostcardError>
     todo("postcard.take_option")
 
 // ── The trait surface: a novo-lang type, with no code to write ──────
