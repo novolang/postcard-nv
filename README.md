@@ -8,12 +8,6 @@ of the data. The format is
 embedded Rust programs use for the payloads they send. This package
 brings it to novo-lang.
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is declared
-with its full signature, but every body is a `todo()` that panics when
-called. The package is published so its design can be reviewed and
-depended on before it is implemented. Version 0.1.0 will be the first
-working release.
-
 ## What the format is
 
 A **varint** is an integer written seven bits per byte, low bits first,
@@ -69,36 +63,42 @@ struct Reading
     celsius: Float
 
 fn main() [io]
-    match postcard.to_bytes(Reading { sensor: 3, celsius: 21.5 })
+    // Nine bytes: 06 is the zigzag varint for 3, and the eight that
+    // follow are 21.5 as a little-endian double.
+    var b = postcard.to_bytes(Reading { sensor: 3, celsius: 21.5 })
+    println(bytes.to_hex(b))   // 060000000000803540
+
+    // Reading it back is done part by part, in the order written.
+    var c = bytes.cursor_le(b)
+    match postcard.take_signed(c)
+        Ok(sensor) => println("sensor ${sensor}")   // sensor 3
+        Err(e)     => println(e.message())
+    match postcard.take_f64(c)
+        Ok(t)  => println("celsius ${t}")           // celsius 21.5
         Err(e) => println(e.message())
-        // Nine bytes: 06 is the zigzag varint for 3, and the eight that
-        // follow are 21.5 as a little-endian double.
-        Ok(b)  => println(bytes.to_hex(b))
 ```
 
-`postcard::from_bytes::<Reading>` in Rust reads the same nine bytes.
-
-Build and test with `novo pkg build` and `novo test`. Today `novo test`
-fails on purpose: every test reaches a `not implemented: postcard.<fn>`
-panic. The tests are the specification the implementation will have to
-satisfy.
+`postcard::from_bytes::<Reading>` in Rust, with `sensor: i64` and
+`celsius: f64`, reads the same nine bytes.
 
 ## What the package contains
 
 | Module | Contents |
 | --- | --- |
-| `postcard` | The whole package: the two size questions, a `put_` and a `take_` function for every part of the format, the writer and reader that carry the standard library's serialisation traits, and the six named refusals. |
+| `postcard` | The whole package: the two size questions, a `put_` and a `take_` function for every part of the format, the writer that carries the standard library's `Serializer`, and the five named refusals. |
 
 ## How to choose an entry point
 
 **`postcard.to_bytes` writes a novo-lang value through the standard
-library's `Serialize` trait.** Reach for it when both ends are novo-lang
-and the type has no optional member.
+library's `Serialize` trait.** Reach for it when the other end's integers
+are signed or are written as novo-lang writes every `Int`. See rule 3.
 
-**The `put_` and `take_` functions write and read the format byte by
-byte over a `Cursor`.** Reach for them when the other end is Rust and
-its struct holds an unsigned integer or an `Option`, and for every read.
-See rules 4 and 5.
+**The `put_` functions write the format part by part over a
+`Cursor`.** Reach for them when the other end is Rust and its struct
+holds an unsigned integer, a `u8`, or a tuple.
+
+**The `take_` functions read the format part by part over a
+`Cursor`.** They are the way to read a document. See rule 5.
 
 ## The rules a user needs
 
@@ -114,49 +114,58 @@ See rules 4 and 5.
 3. **novo-lang has one integer type and postcard has ten integer
    encodings.** Every `Int` written through the trait goes out as a
    zigzag varint, which is what Rust postcard does for `i16`, `i32`,
-   `i64` and `isize`. A Rust member of type `u32`, `u64` or `usize` is a
-   plain LEB128 varint with no zigzag, and a `u8` or `i8` is one raw
-   byte. Write those with `postcard.put_unsigned` and
+   `i64` and `isize`. A Rust member of type `u16`, `u32`, `u64` or
+   `usize` is a plain LEB128 varint with no zigzag, and a `u8` or `i8`
+   is one raw byte. Write those with `postcard.put_unsigned` and
    `postcard.put_byte`.
-4. **A type with a `?T` member cannot be written through the trait.**
-   `postcard.to_bytes` answers `PostcardOptionalMember`. The
-   `Serializer` trait announces `None` and does not announce `Some`, so
-   a writer has no hook in which to put the `0x01`, and `Some(5)` would
-   go out as the same bytes as a plain `5`. Write the discriminant with
-   `postcard.put_some` or `postcard.put_none` and the value after it.
-   Reading an optional is fine: `postcard.take_option` and the trait's
-   own reading hooks both work.
-5. **Reading a whole value through the trait does not work yet.**
-   `postcard.from_bytes` is published with nothing behind it.
-   `Deserializer.field` answers a child cursor and leaves the parent
-   where it was, which suits a format that carries names and cannot suit
-   one that does not: member 2 begins where member 1 ended, and the
-   parent never learns where that was. Every member would read the first
-   value. Read with the `take_` functions over a `Cursor`, which does
-   advance. One additive trait method, called after each member with the
-   child that read it, would close this.
-6. **An overlong varint is refused.** A varint whose continuation bits
-   run past the width of the type is `PostcardOverlongVarint`. Accepting
-   one would silently truncate the value.
-7. **A discriminant that is neither 0 nor 1 is refused.** That covers a
+4. **An optional member is a discriminant and then the value.**
+   `None` is `0x00`, and `Some(5)` is `0x01` and then `5`'s encoding.
+   The writer writes both through the standard library's
+   `begin_some` hook, and `postcard.take_option` reads the
+   discriminant back.
+5. **A document is read part by part, not through the trait.** The
+   standard library's `Deserializer` answers a child cursor for each
+   member and leaves the parent where it was. A format with names finds
+   each member by its name; postcard has no names, so member 2 begins
+   where member 1 ended and the parent never learns where that was. The
+   `take_` functions read over a `Cursor`, which does advance, so a
+   reader calls them in the order the members were written.
+6. **An enum value is its variant index and then its payload**, under
+   the default external tagging. An enum declared with internal or
+   adjacent tagging has its tag written as a string as well, which Rust
+   postcard does not do.
+7. **A tuple is written with an element count in front.** The
+   `Serializer` announces a tuple as a sequence, and postcard writes a
+   Rust tuple with no count. For a Rust tuple, write the elements with
+   the `put_` functions.
+8. **An overlong varint is refused.** A varint longer than ten bytes, or
+   whose tenth byte holds bits above bit 63, is
+   `PostcardOverlongVarint`. A varint with excess zero groups inside
+   ten bytes is accepted, as the specification's canonicalisation table
+   says.
+9. **A discriminant that is neither 0 nor 1 is refused.** That covers a
    boolean byte and an optional's tag, and it is `PostcardBadTag`.
-8. **A string's bytes must be UTF-8.** Otherwise `PostcardBadUtf8`.
-9. **Reading one value out of a larger buffer leaves the rest.** The
-   cursor's position is where the next value starts.
-   `PostcardTrailingBytes` is for the caller that expected the buffer to
-   hold exactly one value.
-10. **Indexing into a sequence re-scans it.** Postcard writes no
-    offsets, so element *i* is found by reading and discarding elements
-    0 to *i* - 1. Walking a sequence by index therefore costs time
-    proportional to the square of its length. Walk it in order instead.
+10. **A string's bytes must be UTF-8**, as RFC 3629 defines it.
+    Otherwise `PostcardBadUtf8`, with the offset of the string's first
+    byte.
+11. **Reading one value out of a larger buffer leaves the rest.** The
+    cursor's position is where the next value starts.
+    `postcard.take_end` answers `PostcardTrailingBytes` for a caller that
+    expected the buffer to hold exactly one value.
+12. **An `f64` is always little-endian.** `put_f64` and `take_f64` write
+    and read the bytes one at a time, so the cursor's own byte order
+    does not matter.
 
 ## What is not included
 
+- **Reading through the `Deserialize` trait.** See rule 5. The
+  standard library would need a cursor that advances through its
+  `Deserializer` methods before a `from_bytes` could be written.
 - **A build for a microcontroller.** The surface speaks `Bytes`, `Str`
   and `Result`, none of which links on a device today, so this package
   does not build for a microcontroller with no heap allocator and
-  carries no probe program. The device packages beside
-  it are [rzcobs-nv](https://novo-lang.org/packages/rzcobs-nv),
+  carries no probe program. The device packages beside it are
+  [rzcobs-nv](https://novo-lang.org/packages/rzcobs-nv),
   [bbqueue-nv](https://novo-lang.org/packages/bbqueue-nv) and
   [heapless-nv](https://novo-lang.org/packages/heapless-nv).
 - **Framing.** See rule 2.
@@ -167,8 +176,9 @@ See rules 4 and 5.
 - **The postcard-rpc vocabulary.** Endpoints, topics, a
   request-and-reply correlation key and a sequence number all sit on top
   of these bytes, so they belong to a package that depends on this one.
-- **32-bit floats.** postcard writes `f32` as four little-endian bytes,
-  and novo-lang's `Float` is 64-bit.
+- **32-bit floats and 128-bit integers.** postcard writes `f32` as four
+  little-endian bytes and `u128` as a varint of up to nineteen bytes,
+  and novo-lang's `Float` and `Int` are 64-bit.
 - **Any input or output.** Every function here is arithmetic over bytes
   the caller already holds.
 
@@ -177,7 +187,7 @@ See rules 4 and 5.
 - [leb128-nv](https://novo-lang.org/packages/leb128-nv) and
   [zigzag-nv](https://novo-lang.org/packages/zigzag-nv) are this
   package's two dependencies. Postcard's integers are those two
-  encodings, so they are declared rather than written again.
+  encodings.
 - [msgpack-nv](https://novo-lang.org/packages/msgpack-nv) and
   [cbor-nv](https://novo-lang.org/packages/cbor-nv) are the opposite
   trade: a tag in front of every value, so a reader needs no schema and
@@ -194,45 +204,22 @@ See rules 4 and 5.
 ## Tests
 
 ```bash
-novo test tests/postcard_tests.nv      # 26 tests
+novo test tests/postcard_tests.nv      # 34 tests
+bash tests/coverage.sh                 # line coverage over src/
 ```
 
-Every vector is a payload that `postcard::from_bytes` reads and
-`postcard::to_vec` would have produced, which is the only thing wire
-compatibility can mean. The reference implementation is the `postcard`
-crate and its wire specification.
+The vectors are the postcard wire format specification's: the unsigned
+and signed varint tables of "varint encoded integers", the
+canonicalisation table, and the `f64` example of "Serde Data Model
+Types". The composite vectors, a struct, an optional, an enum and a
+sequence, are written byte by byte from the same specification's rules
+and checked against `to_bytes`.
 
-The suite asserts that an unsigned varint is LEB128 and a signed one is
-zigzag first, that a one-byte integer is not varinted, that a double is
-eight little-endian bytes, that a string and a byte run open with a
-varint length, that a sequence opens with its element count and an enum
-with its variant index, that an optional is a discriminant and then the
-value, that reading advances the cursor, that a buffer ending mid-value
-is named as such, that an overlong varint and a bad discriminant are
-refused, that a struct is its members end to end, that the round trip
-through the traits holds for a type without an optional member, and that
-a type with one is refused rather than written wrongly.
-
-The tests compile today and fail at run, each on the `not implemented`
-panic that is its body. That is the expected state of an interface
-release. They turn green one at a time as bodies land.
-
-## Implementation status
-
-| Item | Implemented |
-| --- | --- |
-| `postcard.max_varint_len`, `.unsigned_len`, `.signed_len` | no |
-| `postcard.put_unsigned`, `.put_signed`, `.put_byte`, `.put_bool` | no |
-| `postcard.put_f64`, `.put_str`, `.put_bytes` | no |
-| `postcard.put_seq_len`, `.put_variant`, `.put_none`, `.put_some` | no |
-| `postcard.take_unsigned`, `.take_signed`, `.take_byte`, `.take_bool` | no |
-| `postcard.take_f64`, `.take_str`, `.take_bytes` | no |
-| `postcard.take_seq_len`, `.take_variant`, `.take_option` | no |
-| `postcard.writer`, `.writer_bytes`, `.reader`, `.reader_at` | no |
-| `PostcardWriter`'s `Serializer` methods | no |
-| `PostcardReader`'s `Deserializer` methods | no |
-| `postcard.to_bytes`, `.from_bytes` | no |
-| `postcard.PostcardError.message` | no |
+The suite also asserts the full 64-bit range in both directions, that a
+struct written by the writer reads back with the `take_` functions, that
+every refusal carries the offset it names, that UTF-8 is checked for
+stray continuations, overlong forms, surrogates and values past
+U+10FFFF, and that a writer passed on keeps its own bytes.
 
 ## Licence
 

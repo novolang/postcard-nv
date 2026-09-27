@@ -4,6 +4,39 @@ Every published version, newest first. This file is on the publish
 allow-list, so it travels with the package: it is the only thing a
 consumer deciding whether to upgrade can read.
 
+## 0.1.0 — 2026-09-27
+
+The first implementation of the interface published as 0.0.1 to
+0.0.3: the whole raw surface, and the writer for the standard library's
+`Serializer`, with the postcard wire format specification's tables as
+the test vectors.
+
+Breaking, against the interface:
+
+- The reading half of the trait surface is left out: `PostcardReader`,
+  `reader`, `reader_at`, `impl Deserializer for PostcardReader` and
+  `from_bytes`.  The standard library's `Deserializer` gives each member
+  a child cursor and leaves the parent where it was, so a format with no
+  names cannot advance through it, and every member would read the first
+  value.  That trait is unchanged in novo 0.13.0, and publishing the
+  functions with nothing behind them is refused.  Documents are read
+  with the `take_` functions.
+- `PostcardOptionalMember` is gone, and a `?T` member is written: the
+  standard library's `Serializer` gained `begin_some` in novo 0.9.0, and
+  the writer puts `0x01` there and `0x00` in `put_null`, as postcard
+  does.
+- `to_bytes` and `writer_bytes` answer `Bytes` rather than
+  `Result<Bytes, PostcardError>`, because nothing a value can hold is
+  refused any more.
+- `PostcardWriter` holds its bytes as a chain of the chunks each call
+  wrote, so a write never copies what came before.  Its fields changed
+  accordingly.
+
+Added:
+
+- `take_end`, which answers `PostcardTrailingBytes` when a buffer holds
+  more than the value read from it.
+
 ## 0.0.3 — 2026-09-25
 
 The package builds with novo 0.11.  Every body is still `todo()`.
