@@ -1,18 +1,15 @@
-// tests/postcard_tests.nv — the API tests, written against the
-// signatures.
+// tests/postcard_tests.nv — the postcard wire format specification's
+// vectors, and round trips.
 //
-// They COMPILE today and they FAIL at run, with `not implemented:
-// postcard.<fn>` from the `todo()` that is each body.  That is the
-// expected state of an interface release: the compiler has checked
-// every signature, every type and every effect row, and nothing else
-// has been checked because there is nothing else yet.
-//
-// EVERY VECTOR IS RUST postcard's.  A test that passes here is a
-// payload `postcard::from_bytes` reads and a payload `postcard::to_vec`
-// would have produced — which is the only thing "wire-compatible" can
-// mean.
+// Every vector is one the specification documents or one its rules fix
+// byte for byte: the unsigned and signed varint tables of "varint
+// encoded integers", the canonicalisation table, and the `f64` example
+// of "Serde Data Model Types".  A test that passes here is a payload
+// Rust's `postcard::from_bytes` reads and `postcard::to_vec` would have
+// produced.
 
 use std.test
+use std.str
 use std.bytes
 use postcard
 
@@ -25,7 +22,7 @@ fn hex(s: Str) -> Bytes
 fn wrote(n: Int) -> Cursor
     bytes.cursor_le(bytes.zeros(n))
 
-fn hex_of(c: Cursor, n: Int) -> Str
+fn hex_of(var c: Cursor, n: Int) -> Str
     bytes.to_hex(bytes.slice(c.finish(), 0, n))
 
 // ── The varints ─────────────────────────────────────────────────────
@@ -49,9 +46,9 @@ fn test_a_signed_varint_is_zigzag_then_leb128()
     // here and ten bytes without it.
     var c = wrote(16)
     let a = postcard.put_signed(c, 0)
-    let b = postcard.put_signed(c, 0 - 1)
+    let b = postcard.put_signed(c, -1)
     let d = postcard.put_signed(c, 1)
-    let e = postcard.put_signed(c, 0 - 2)
+    let e = postcard.put_signed(c, -2)
     test.assert_eq(hex_of(c, a + b + d + e), "00010203")
 
 @test
@@ -62,9 +59,9 @@ fn test_the_encoded_length_is_answerable_without_encoding()
     test.assert_eq(postcard.unsigned_len(128), 2)
     // Zigzag folds -64 into 127, which still fits one byte; -65 does
     // not.
-    test.assert_eq(postcard.signed_len(0 - 1), 1)
-    test.assert_eq(postcard.signed_len(0 - 64), 1)
-    test.assert_eq(postcard.signed_len(0 - 65), 2)
+    test.assert_eq(postcard.signed_len(-1), 1)
+    test.assert_eq(postcard.signed_len(-64), 1)
+    test.assert_eq(postcard.signed_len(-65), 2)
     // Ten bytes is a 64-bit value at seven bits each.
     test.assert_eq(postcard.max_varint_len(), 10)
 
@@ -156,7 +153,7 @@ fn test_reading_a_varint_advances_the_cursor()
 @test
 fn test_reading_a_signed_varint_unfolds_the_zigzag()
     var c = bytes.cursor_le(hex("00010203"))
-    let want = [0, 0 - 1, 1, 0 - 2]
+    let want = [0, -1, 1, -2]
     for i in 0..4
         match postcard.take_signed(c)
             Err(e) => test.fail(e.message())
@@ -219,7 +216,6 @@ fn test_a_buffer_that_ends_mid_value_is_named_as_such()
                 PostcardBadTag(at, tag)      => test.fail("expected truncated, got tag ${tag} at ${at}")
                 PostcardBadUtf8(at)          => test.fail("expected truncated at ${at}")
                 PostcardTrailingBytes(at, n) => test.fail("expected truncated at ${at}")
-                PostcardOptionalMember       => test.fail("expected truncated, got the optional refusal")
 
 @test
 fn test_a_varint_wider_than_its_type_is_refused()
@@ -235,7 +231,6 @@ fn test_a_varint_wider_than_its_type_is_refused()
                 PostcardBadTag(at, tag)      => test.fail("expected overlong, got tag ${tag} at ${at}")
                 PostcardBadUtf8(at)          => test.fail("expected overlong at ${at}")
                 PostcardTrailingBytes(at, n) => test.fail("expected overlong at ${at}")
-                PostcardOptionalMember       => test.fail("expected overlong, got the optional refusal")
 
 @test
 fn test_a_discriminant_that_is_neither_zero_nor_one()
@@ -249,7 +244,6 @@ fn test_a_discriminant_that_is_neither_zero_nor_one()
                 PostcardOverlongVarint(at)   => test.fail("expected a bad tag at ${at}")
                 PostcardBadUtf8(at)          => test.fail("expected a bad tag at ${at}")
                 PostcardTrailingBytes(at, n) => test.fail("expected a bad tag at ${at}")
-                PostcardOptionalMember       => test.fail("expected a bad tag, got the optional refusal")
 
 @test
 fn test_a_string_whose_bytes_are_not_utf8()
@@ -264,9 +258,8 @@ fn test_a_string_whose_bytes_are_not_utf8()
                 PostcardOverlongVarint(at)   => test.fail("expected bad utf8 at ${at}")
                 PostcardBadTag(at, tag)      => test.fail("expected bad utf8, got tag ${tag} at ${at}")
                 PostcardTrailingBytes(at, n) => test.fail("expected bad utf8 at ${at}")
-                PostcardOptionalMember       => test.fail("expected bad utf8, got the optional refusal")
 
-// ── The trait surface ───────────────────────────────────────────────
+// ── The writer ──────────────────────────────────────────────────────
 
 struct Reading
     sensor: Int
@@ -276,86 +269,206 @@ struct Optional
     tag: Int
     note: ?Int
 
+enum Shape
+    Dot
+    Circle(r: Int)
+    Label(text: Str, size: Int)
+
+struct Scene
+    name: Str
+    shapes: [Shape]
+    visible: Bool
+
 @test
 fn test_a_struct_is_its_members_end_to_end()
     // No names, no lengths, no framing: a zigzag varint and eight bytes
     // of double, and that is the whole document.
-    match postcard.to_bytes(Reading { sensor: 3, celsius: 21.5 })
-        Err(e) => test.fail(e.message())
-        Ok(b)  =>
-            test.assert_eq(bytes.len(b), 9)
-            test.assert_eq(bytes.to_hex(b), "060000000000803540")
+    let b = postcard.to_bytes(Reading { sensor: 3, celsius: 21.5 })
+    test.assert_eq(bytes.len(b), 9)
+    test.assert_eq(bytes.to_hex(b), "060000000000803540")
 
 @test
-fn test_the_round_trip_through_the_traits()
-    // This one is red for a second reason, and it is the reason the
-    // README's "Reading a novo-lang type back does not work yet"
-    // section exists: `Deserializer` hands the same parent cursor to
-    // every member, so a format with no names and no offsets cannot
-    // advance and every member reads the first value.  The assertion
-    // stays as the shape the package wants, and it turns green when the
-    // standard library's cursor is threaded rather than when a body
-    // lands here.
-    match postcard.to_bytes(Reading { sensor: 3, celsius: 21.5 })
+fn test_a_struct_written_by_the_writer_reads_back_with_the_raw_surface()
+    var c = bytes.cursor_le(postcard.to_bytes(Reading { sensor: -300, celsius: -0.5 }))
+    match postcard.take_signed(c)
         Err(e) => test.fail(e.message())
-        Ok(b)  =>
-            let back: Result<Reading, DeserializeError> = postcard.from_bytes(b)
-            match back
-                Err(e) => test.fail(e.message())
-                Ok(r)  =>
-                    test.assert_eq(r.sensor, 3)
-                    test.assert_approx(r.celsius, 21.5, 0.0001)
+        Ok(v)  => test.assert_eq(v, -300)
+    match postcard.take_f64(c)
+        Err(e) => test.fail(e.message())
+        Ok(v)  => test.assert_approx(v, -0.5, 0.0)
+    match postcard.take_end(c)
+        Err(e) => test.fail(e.message())
+        Ok(n)  => test.assert_eq(n, 10)
 
 @test
-fn test_an_optional_member_is_refused_rather_than_written_wrongly()
-    // The one thing the `Serializer` trait cannot say.  postcard's
-    // `Option` is a discriminant and then the value; the trait
-    // announces `None` and does not announce `Some`, so a writer
-    // cannot put the 1 in front of a present value — and a document
-    // that encoded `Some(5)` as a bare 5 would be read back as a
-    // `None` followed by garbage.
-    //
-    // So it is a refusal, and the raw surface is the way through.
-    match postcard.to_bytes(Optional { tag: 1, note: None })
-        Ok(b)  => test.fail("a ?T member has no postcard encoding through the trait: ${bytes.to_hex(b)}")
-        Err(e) =>
-            match e
-                PostcardOptionalMember       => test.assert_true(true, "refused, as declared")
-                PostcardTruncated(at, need)  => test.fail("expected the optional refusal, got truncated at ${at}")
-                PostcardOverlongVarint(at)   => test.fail("expected the optional refusal at ${at}")
-                PostcardBadTag(at, tag)      => test.fail("expected the optional refusal, got tag ${tag}")
-                PostcardBadUtf8(at)          => test.fail("expected the optional refusal at ${at}")
-                PostcardTrailingBytes(at, n) => test.fail("expected the optional refusal at ${at}")
+fn test_an_optional_member_is_a_discriminant_and_then_the_value()
+    // The specification's `option`: 0x00 alone, or 0x01 and the value.
+    test.assert_eq(bytes.to_hex(postcard.to_bytes(Optional { tag: 1, note: None })), "0200")
+    test.assert_eq(bytes.to_hex(postcard.to_bytes(Optional { tag: 1, note: Some(5) })), "02010a")
+
+@test
+fn test_an_enum_is_its_variant_index_and_then_its_payload()
+    // A `unit_variant` is the index alone; a `struct_variant` is the
+    // index and the members.
+    let scene = Scene { name: "ab", shapes: [Dot, Circle(2), Label("x", -1)], visible: true }
+    test.assert_eq(bytes.to_hex(postcard.to_bytes(scene)), "026162030001040201780101")
 
 @test
 fn test_a_writer_can_be_driven_by_hand()
-    // The writer, the trait's methods on it, and the finish — so that a
+    // The writer, the trait's methods on it, and the finish, so that a
     // caller assembling a document out of several values does not have
     // to go through `to_bytes` for each.
     let w = postcard.writer()
     let w2 = w.put_int(3)
     let w3 = w2.put_bool(true)
-    match postcard.writer_bytes(w3)
-        Err(e) => test.fail(e.message())
-        Ok(b)  => test.assert_eq(bytes.to_hex(b), "0601")
+    test.assert_eq(bytes.to_hex(postcard.writer_bytes(w3)), "0601")
+    test.case("a writer passed on keeps its own bytes")
+    test.assert_eq(bytes.to_hex(postcard.writer_bytes(w2)), "06")
+    test.assert_eq(bytes.len(postcard.writer_bytes(w)), 0)
+    let w4 = w3.put_str("é").put_float(1.0).begin_seq(2).elem().put_null().end_seq()
+    test.assert_eq(bytes.to_hex(postcard.writer_bytes(w4)), "060102c3a9000000000000f03f0200")
+    let w5 = w4.put_bool(false).begin_some().put_int(-1).end_some()
+    test.assert_eq(bytes.to_hex(postcard.writer_bytes(w5)), "060102c3a9000000000000f03f0200000101")
+
+// ── The specification's tables ──────────────────────────────────────
+
+fn unsigned_hex(v: Int) -> Str
+    var c = wrote(16)
+    let n = postcard.put_unsigned(c, v)
+    test.assert_eq(n, postcard.unsigned_len(v))
+    hex_of(c, n)
+
+fn signed_hex(v: Int) -> Str
+    var c = wrote(16)
+    let n = postcard.put_signed(c, v)
+    test.assert_eq(n, postcard.signed_len(v))
+    hex_of(c, n)
 
 @test
-fn test_a_reader_says_where_it_stopped()
-    // The one thing a caller decoding a STREAM of postcard messages
-    // needs and cannot get from the format: there is no terminator, so
-    // the end of one message is wherever the reader stopped.
-    let r = postcard.reader(hex("060000000000803540ff"))
-    test.assert_eq(postcard.reader_at(r), 0)
-    let after: Result<Reading, DeserializeError> = postcard.from_bytes(hex("060000000000803540ff"))
-    match after
-        Err(e) => test.fail(e.message())
-        Ok(v)  => test.assert_eq(v.sensor, 3)
+fn test_the_unsigned_integer_encoding_table()
+    for row in [(0, "00"), (127, "7f"), (128, "8001"), (16383, "ff7f"), (16384, "808001"),
+                (16385, "818001"), (65535, "ffff03")]
+        let (v, want) = row
+        test.assert_eq(unsigned_hex(v), want)
+        var r = bytes.cursor_le(hex(want))
+        match postcard.take_unsigned(r)
+            Ok(back) => test.assert_eq(back, v)
+            Err(e)   => test.fail(e.message())
 
 @test
-fn test_the_cursor_carries_no_names()
-    // `keys` is the empty list because the wire has no names in it.
-    // Published rather than hidden, because a caller writing a
-    // `Deserialize` impl by hand has to know which of the trait's
-    // methods this format can answer.
-    let r = postcard.reader(hex("06"))
-    test.assert_eq(list.len(r.keys()), 0)
+fn test_the_signed_integer_encoding_table()
+    for row in [(0, "00"), (-1, "01"), (1, "02"), (63, "7e"), (-64, "7f"), (64, "8001"),
+                (-65, "8101"), (32767, "feff03"), (-32768, "ffff03")]
+        let (v, want) = row
+        test.assert_eq(signed_hex(v), want)
+        var r = bytes.cursor_le(hex(want))
+        match postcard.take_signed(r)
+            Ok(back) => test.assert_eq(back, v)
+            Err(e)   => test.fail(e.message())
+
+@test
+fn test_the_full_64_bit_range()
+    test.assert_eq(signed_hex(-9223372036854775808), "ffffffffffffffffff01")
+    test.assert_eq(signed_hex(9223372036854775807), "feffffffffffffffff01")
+    test.assert_eq(unsigned_hex(-1), "ffffffffffffffffff01")
+    var r = bytes.cursor_le(hex("ffffffffffffffffff01"))
+    match postcard.take_unsigned(r)
+        Ok(v)  => test.assert_eq(v, -1)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_a_non_canonical_varint_within_ten_bytes_is_accepted()
+    // The canonicalisation table: excess bytes are accepted within the
+    // type's maximum length.
+    for form in ["8000", "808000"]
+        var r = bytes.cursor_le(hex(form))
+        match postcard.take_unsigned(r)
+            Ok(v)  => test.assert_eq(v, 0)
+            Err(e) => test.fail(e.message())
+
+@test
+fn test_a_tenth_byte_with_bits_above_bit_63_is_refused()
+    var r = bytes.cursor_le(hex("ffffffffffffffffff02"))
+    match postcard.take_unsigned(r)
+        Ok(v)  => test.fail("that is 65 bits: ${v}")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: the varint at offset 0 does not fit 64 bits")
+
+@test
+fn test_the_f64_example()
+    // "-32.005859375f64 ... encoded as [0x00, 0x00, 0x00, 0x00, 0xc0,
+    // 0x00, 0x40, 0xc0]".
+    var c = wrote(8)
+    let n = postcard.put_f64(c, -32.005859375)
+    test.assert_eq(hex_of(c, n), "00000000c00040c0")
+    var r = bytes.cursor_le(hex("00000000c00040c0"))
+    match postcard.take_f64(r)
+        Ok(v)  => test.assert_approx(v, -32.005859375, 0.0)
+        Err(e) => test.fail(e.message())
+    test.case("and a big-endian cursor still gets little-endian bytes")
+    var be = bytes.cursor_be(bytes.zeros(8))
+    let m = postcard.put_f64(be, -32.005859375)
+    test.assert_eq(hex_of(be, m), "00000000c00040c0")
+
+// ── Every refusal, with its message ─────────────────────────────────
+
+@test
+fn test_every_refusal_says_where()
+    var short = bytes.cursor_le(hex("00000000"))
+    match postcard.take_f64(short)
+        Ok(_)  => test.fail("four bytes are not a double")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: the buffer ends 4 byte(s) short of the value at offset 0")
+    var empty = bytes.cursor_le(hex(""))
+    match postcard.take_byte(empty)
+        Ok(_)  => test.fail("no byte")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: the buffer ends 1 byte(s) short of the value at offset 0")
+    var run = bytes.cursor_le(hex("0501"))
+    match postcard.take_bytes(run)
+        Ok(_)  => test.fail("five bytes promised, one there")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: the buffer ends 4 byte(s) short of the value at offset 0")
+    var tag = bytes.cursor_le(hex("0102"))
+    match postcard.take_bool(tag)
+        Ok(v)  => test.assert_true(v, "the first byte is true")
+        Err(e) => test.fail(e.message())
+    match postcard.take_bool(tag)
+        Ok(_)  => test.fail("2 is not a bool")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: byte 2 at offset 1 is neither 0 nor 1")
+    var text = bytes.cursor_le(hex("02c328"))
+    match postcard.take_str(text)
+        Ok(_)  => test.fail("c3 28 is not UTF-8")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: the string at offset 1 is not UTF-8")
+    var left = bytes.cursor_le(hex("0607"))
+    match postcard.take_signed(left)
+        Ok(v)  => test.assert_eq(v, 3)
+        Err(e) => test.fail(e.message())
+    match postcard.take_end(left)
+        Ok(_)  => test.fail("a byte is left")
+        Err(e) => test.assert_eq_str(e.message(), "postcard: 1 byte(s) left over at offset 1")
+
+@test
+fn test_utf8_is_checked_as_rfc_3629_defines_it()
+    // Well formed: ASCII, two, three and four bytes.
+    for good in ["0161", "02c3a9", "03e282ac", "04f09f9880", "00"]
+        var c = bytes.cursor_le(hex(good))
+        match postcard.take_str(c)
+            Ok(_)  => test.assert_true(true, good)
+            Err(e) => test.fail("${good}: ${e.message()}")
+    // Ill formed: a stray continuation, an overlong form, a surrogate,
+    // past U+10FFFF, too short, and bytes no form begins with.
+    for bad in ["0180", "02c080", "03e08080", "03eda080", "04f4908080", "04f0808080",
+                "02e282", "01ff", "01f5"]
+        var c = bytes.cursor_le(hex(bad))
+        match postcard.take_str(c)
+            Ok(v)  => test.fail("${bad} decoded as ${v}")
+            Err(e) => test.assert_true(str.contains(e.message(), "not UTF-8"), bad)
+
+@test
+fn test_a_string_and_a_byte_run_round_trip()
+    var c = wrote(64)
+    let n = postcard.put_str(c, "grüße ∑") + postcard.put_bytes(c, hex("00ff"))
+    var r = bytes.cursor_le(bytes.slice(c.finish(), 0, n))
+    match postcard.take_str(r)
+        Ok(v)  => test.assert_eq_str(v, "grüße ∑")
+        Err(e) => test.fail(e.message())
+    match postcard.take_bytes(r)
+        Ok(b)  => test.assert_eq(bytes.to_hex(b), "00ff")
+        Err(e) => test.fail(e.message())
