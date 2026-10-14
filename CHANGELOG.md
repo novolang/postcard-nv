@@ -4,6 +4,12 @@ Every published version, newest first. This file is on the publish
 allow-list, so it travels with the package: it is the only thing a
 consumer deciding whether to upgrade can read.
 
+## Unreleased
+
+### Fixed
+
+- A byte string or string whose declared length has the top bit set is refused as truncated instead of overflowing the shortfall subtraction.
+
 ## 0.1.0 — 2026-09-27
 
 The first implementation of the interface published as 0.0.1 to

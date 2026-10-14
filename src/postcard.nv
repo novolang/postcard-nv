@@ -240,7 +240,10 @@ pub fn take_bytes(var src: Cursor) -> Result<Bytes, PostcardError>
     let at = src.pos()
     let n = take_unsigned(src)!
     let have = src.remaining()
-    if n < 0 or n > have
+    if n < 0
+        // A length with the top bit set has no value as an Int; the shortfall is reported as one byte.
+        return Err(PostcardTruncated(at, 1))
+    if n > have
         return Err(PostcardTruncated(at, n - have))
     Ok(src.bytes(n))
 

@@ -1,0 +1,37 @@
+// tests/hostile_tests.nv — payloads whose declared lengths cannot be honoured.
+
+use std.test
+use std.bytes
+use postcard
+
+fn hex(s: Str) -> Bytes
+    bytes.from_hex(s) ?? bytes.zeros(0)
+
+@test
+fn test_a_length_with_the_top_bit_set_is_refused()
+    // 0x8000000000000000 as a varint, then three bytes of payload.
+    var c = bytes.cursor_le(hex("80808080808080808001aabbcc"))
+    match postcard.take_bytes(c)
+        Err(_e) => test.assert_eq(1, 1)
+        Ok(_b)  => test.fail("a length of 2^63 was accepted")
+
+@test
+fn test_a_length_of_int_max_is_refused()
+    var c = bytes.cursor_le(hex("ffffffffffffffff7faabbcc"))
+    match postcard.take_bytes(c)
+        Err(_e) => test.assert_eq(1, 1)
+        Ok(_b)  => test.fail("a length of Int max was accepted")
+
+@test
+fn test_a_string_with_an_oversized_length_is_refused()
+    var c = bytes.cursor_le(hex("80808080808080808001aabbcc"))
+    match postcard.take_str(c)
+        Err(_e) => test.assert_eq(1, 1)
+        Ok(_s)  => test.fail("an oversized string length was accepted")
+
+@test
+fn test_an_honest_byte_string_still_decodes()
+    var c = bytes.cursor_le(hex("03010203"))
+    match postcard.take_bytes(c)
+        Err(e) => test.fail(e.message())
+        Ok(b)  => test.assert_eq(bytes.to_hex(b), "010203")
